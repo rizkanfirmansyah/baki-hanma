@@ -1,1 +1,1 @@
-"""Style package."""
+"""Styling package for BAKI HANMA."""

@@ -1,1 +1,1 @@
-"""UI package."""
+"""UI package for BAKI HANMA."""

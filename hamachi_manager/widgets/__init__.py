@@ -1,1 +1,1 @@
-"""Widget package."""
+"""Widget package for BAKI HANMA."""

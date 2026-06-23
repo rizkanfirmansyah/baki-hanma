@@ -1,1 +1,1 @@
-"""Service package."""
+"""Service layer for BAKI HANMA."""
