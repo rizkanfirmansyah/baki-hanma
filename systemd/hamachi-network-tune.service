@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply MTU and TCP MSS tuning for Hamachi interface
+After=logmein-hamachi.service
+Wants=logmein-hamachi.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/hamachi-network-tune.sh ham0 1250 clamp
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

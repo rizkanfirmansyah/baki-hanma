@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=BAKI HANMA
+Comment=Bash Kit Hamachi Network Manager
+Exec=/home/rayyan/app/hamachiApps/venv/bin/python /home/rayyan/app/hamachiApps/main.py
+Icon=/home/rayyan/app/hamachiApps/logo.png
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=true

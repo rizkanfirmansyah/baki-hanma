@@ -1,10 +1,10 @@
 # BAKI HANMA
 
-BAKI HANMA now supports traffic source switching, so the monitor can follow `ham0`, `wlp`, or another useful interface when Hamachi traffic does not stay on a single device.
+BAKI HANMA now includes Linux packaging assets and daemon helper scripts for a smoother desktop deployment path.
 
 ## Features in this stage
 
-- Broad workspace for networks, notes, members, logs, and traffic
-- Traffic chart with auto/manual interface source selection
-- Better visibility when traffic moves from `ham0` to another active interface
-- Export support and operational notes panel
+- Application icon support through `logo.png`
+- Desktop launcher file for app menu integration
+- Hamachi systemd wrapper and network tuning helper scripts
+- Dark desktop bootstrap with Wayland/X11 friendly startup logic
