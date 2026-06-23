@@ -5,7 +5,7 @@ from pathlib import Path
 from time import monotonic
 
 from openpyxl import Workbook
-from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtCore import QProcess, QTimer, Qt
 from PyQt6.QtGui import QColor, QFont, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -49,6 +49,13 @@ class MainWindow(QMainWindow):
         self._traffic_interface: str | None = None
         self._traffic_manual_interface: str | None = None
         self._traffic_prev_sample: tuple[int, int, float] | None = None
+        self._mtu_test_process: QProcess | None = None
+        self._mtu_test_target_ip: str = ""
+        self._mtu_test_target_name: str = ""
+        self._mtu_test_queue: list[int] = []
+        self._mtu_test_results: list[tuple[int, bool]] = []
+        self._mtu_test_stdout = ""
+        self._mtu_test_stderr = ""
         self.mono_font = QFont("DejaVu Sans Mono", 10)
         if icon_path and icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
@@ -115,6 +122,9 @@ class MainWindow(QMainWindow):
             ("Leave", self._leave_network, False),
             ("Set Nickname", self._set_nickname, False),
             ("Safe Profile", self._apply_safe_mtu_profile, False),
+            ("Set MTU", self._set_mtu, False),
+            ("Lower MTU", self._step_down_mtu, False),
+            ("Auto MTU Test", self._run_auto_mtu_test, False),
         ]:
             button = QPushButton(label, bar)
             if primary:
@@ -230,6 +240,8 @@ class MainWindow(QMainWindow):
         header_row.addWidget(export_csv_button)
         header_row.addWidget(export_xlsx_button)
         layout.addLayout(header_row)
+        self.member_route_label = QLabel("", group)
+        layout.addWidget(self.member_route_label)
         self.member_table = QTableWidget(0, 8, group)
         self.member_table.setHorizontalHeaderLabels(["Nickname", "IPv4", "IPv6", "Status", "Direct / Relay", "Endpoint", "Client ID", "Connection Type"])
         self._configure_table(self.member_table)
@@ -309,6 +321,13 @@ class MainWindow(QMainWindow):
         self.current_members = members
         self.member_table.setRowCount(len(members))
         self.member_count_label.setText(f"{len(members)} member visible in the selected network")
+        relay_count = sum(1 for member in members if "relay" in member.direct_state.lower())
+        if relay_count:
+            self.member_route_label.setText(f"Relay warning: {relay_count} member use relayed routing. SSH/web throughput may become unstable.")
+            self.member_route_label.setStyleSheet("color: #e3b341; font-weight: 600;")
+        else:
+            self.member_route_label.setText(f"Preferred MTU {self.service.preferred_mtu()} ready for direct paths.")
+            self.member_route_label.setStyleSheet("color: #7ee787; font-weight: 600;")
         for row, member in enumerate(members):
             values = [member.nickname, member.ipv4, member.ipv6, "Online" if member.online else "Offline", member.direct_state, member.endpoint_ip, member.client_id, member.connection_type]
             for col, value in enumerate(values):
@@ -332,6 +351,12 @@ class MainWindow(QMainWindow):
         if self.current_status.account != "-":
             lines.extend(["", f"Account: {self.current_status.account}"])
         lines.append(f"Preferred Hamachi MTU: {self.service.preferred_mtu()}")
+        relay_count = sum(1 for member in self.current_members if "relay" in member.direct_state.lower())
+        direct_count = sum(1 for member in self.current_members if "direct" in member.direct_state.lower())
+        if self.current_members:
+            lines.append(f"Member Route Summary: {direct_count} direct, {relay_count} relay")
+            if relay_count:
+                lines.append("Warning: relay routing can keep peers connected while SSH/web throughput becomes unstable.")
         if self.current_networks:
             selected = self.current_networks[0]
             lines.extend(["", f"Selected Network: {selected.name}", f"Network ID: {selected.network_id}"])
@@ -479,6 +504,105 @@ class MainWindow(QMainWindow):
         mtu = self.service.apply_safe_web_profile()
         self.logger.log(f"Safe SSH/web profile selected: MTU {mtu}")
         self._update_notes()
+
+    def _set_mtu(self) -> None:
+        mtu, accepted = QInputDialog.getInt(self, "Set Hamachi MTU", "Preferred MTU for Hamachi tuning:", self.service.preferred_mtu(), 1000, 1450, 1)
+        if not accepted:
+            return
+        self.service.set_preferred_mtu(mtu, apply_now=True)
+        self._update_notes()
+
+    def _step_down_mtu(self) -> None:
+        mtu = self.service.step_down_mtu(apply_now=True)
+        self.logger.log(f"Lower MTU preset applied: MTU {mtu}")
+        self._update_notes()
+
+    def _run_auto_mtu_test(self) -> None:
+        if self._mtu_test_process is not None:
+            self._show_error("Auto MTU Test", "An MTU test is already running.")
+            return
+        row = self.member_table.currentRow()
+        if row < 0 or row >= len(self.current_members):
+            self._show_error("Auto MTU Test", "Select a member with a Hamachi IPv4 address first.")
+            return
+        member = self.current_members[row]
+        if member.ipv4 == "-":
+            self._show_error("Auto MTU Test", "Selected member does not have a Hamachi IPv4 address.")
+            return
+        preferred = self.service.preferred_mtu()
+        lower_presets = [mtu for mtu in self.service.available_mtu_presets() if mtu < preferred]
+        deduped = []
+        for mtu in [preferred, *lower_presets]:
+            if mtu not in deduped:
+                deduped.append(mtu)
+        self._mtu_test_target_ip = member.ipv4
+        self._mtu_test_target_name = member.nickname
+        self._mtu_test_queue = deduped
+        self._mtu_test_results = []
+        self.logger.log(f"Starting Auto MTU Test for {member.nickname} ({member.ipv4}) with presets: {', '.join(str(mtu) for mtu in deduped)}")
+        self._start_next_mtu_test()
+
+    def _start_next_mtu_test(self) -> None:
+        if not self._mtu_test_queue:
+            self._finish_auto_mtu_test()
+            return
+        mtu = self._mtu_test_queue.pop(0)
+        payload_size = max(mtu - 28, 0)
+        self._mtu_test_stdout = ""
+        self._mtu_test_stderr = ""
+        process = QProcess(self)
+        self._mtu_test_process = process
+        process.setProgram("ping")
+        process.setArguments(["-c", "2", "-W", "2", "-M", "do", "-s", str(payload_size), self._mtu_test_target_ip])
+        process.readyReadStandardOutput.connect(self._handle_mtu_test_stdout)
+        process.readyReadStandardError.connect(self._handle_mtu_test_stderr)
+        process.finished.connect(lambda code, _status, test_mtu=mtu: self._handle_mtu_test_finished(test_mtu, code))
+        self.logger.log(f"Executing: ping -c 2 -W 2 -M do -s {payload_size} {self._mtu_test_target_ip} (MTU {mtu})")
+        process.start()
+
+    def _handle_mtu_test_stdout(self) -> None:
+        if not self._mtu_test_process:
+            return
+        chunk = bytes(self._mtu_test_process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        self._mtu_test_stdout += chunk
+        self.logger.log(chunk)
+
+    def _handle_mtu_test_stderr(self) -> None:
+        if not self._mtu_test_process:
+            return
+        chunk = bytes(self._mtu_test_process.readAllStandardError()).decode("utf-8", errors="replace")
+        self._mtu_test_stderr += chunk
+        self.logger.log(chunk)
+
+    def _handle_mtu_test_finished(self, mtu: int, exit_code: int) -> None:
+        combined = "\n".join(part for part in (self._mtu_test_stdout, self._mtu_test_stderr) if part).strip()
+        success = exit_code == 0 and "100% packet loss" not in combined.lower()
+        self._mtu_test_results.append((mtu, success))
+        process = self._mtu_test_process
+        self._mtu_test_process = None
+        if process is not None:
+            process.deleteLater()
+        if success:
+            self.logger.log(f"Auto MTU Test success with MTU {mtu}; applying profile.")
+            self.service.set_preferred_mtu(mtu, apply_now=True)
+            self._update_notes()
+            self._finish_auto_mtu_test(success_mtu=mtu)
+            return
+        self.logger.log(f"Auto MTU Test failed with MTU {mtu}; trying next preset if available.")
+        self._start_next_mtu_test()
+
+    def _finish_auto_mtu_test(self, success_mtu: int | None = None) -> None:
+        target_label = f"{self._mtu_test_target_name} ({self._mtu_test_target_ip})" if self._mtu_test_target_ip else "selected peer"
+        results_summary = ", ".join(f"{mtu}:{'ok' if ok else 'fail'}" for mtu, ok in self._mtu_test_results) or "no tests executed"
+        if success_mtu is not None:
+            QMessageBox.information(self, "Auto MTU Test", f"Best working MTU for {target_label}: {success_mtu}\n\nResults: {results_summary}")
+        else:
+            self._show_error("Auto MTU Test", f"No tested MTU preset succeeded for {target_label}.\n\nResults: {results_summary}")
+        self._mtu_test_target_ip = ""
+        self._mtu_test_target_name = ""
+        self._mtu_test_queue = []
+        self._mtu_test_stdout = ""
+        self._mtu_test_stderr = ""
 
     def _export_csv(self) -> None:
         if not self.current_members:

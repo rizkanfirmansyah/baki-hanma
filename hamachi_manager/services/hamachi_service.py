@@ -48,6 +48,7 @@ class HamachiService(QObject):
         self._previous_online_state = False
         self._member_state_cache: dict[str, bool] = {}
         self._last_error_message: str | None = None
+        self._mtu_presets = (1250, 1200, 1180, 1160)
         self._preferred_mtu = 1250
         self._last_tune_attempt = 0.0
         self._tune_cooldown_seconds = 20.0
@@ -81,11 +82,32 @@ class HamachiService(QObject):
     def preferred_mtu(self) -> int:
         return self._preferred_mtu
 
+    def available_mtu_presets(self) -> tuple[int, ...]:
+        return self._mtu_presets
+
+    def set_preferred_mtu(self, mtu: int, apply_now: bool = True) -> None:
+        mtu = max(1000, min(mtu, 1450))
+        self._preferred_mtu = mtu
+        self.logger.log(f"Preferred Hamachi MTU set to {mtu}")
+        if apply_now:
+            self.apply_network_tuning(force=True)
+
     def apply_safe_web_profile(self) -> int:
         self._preferred_mtu = 1200
         self.logger.log("Applied safe SSH/web profile")
         self.apply_network_tuning(force=True)
         return self._preferred_mtu
+
+    def step_down_mtu(self, apply_now: bool = True) -> int:
+        ordered = sorted(self._mtu_presets, reverse=True)
+        target = ordered[-1]
+        for preset in ordered:
+            if preset < self._preferred_mtu:
+                target = preset
+                break
+        self.set_preferred_mtu(target, apply_now=apply_now)
+        self.logger.log(f"Stepped down preferred MTU to {target}")
+        return target
 
     def apply_network_tuning(self, force: bool = True) -> None:
         self._ensure_network_tuning(force=force)

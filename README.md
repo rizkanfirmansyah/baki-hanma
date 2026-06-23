@@ -1,10 +1,11 @@
 # BAKI HANMA
 
-This stage adds safer Hamachi transport preparation for SSH and web traffic.
+This stage adds manual MTU control and quick diagnostics for unstable Hamachi data paths.
 
 ## Features in this stage
 
-- Automatic Hamachi MTU prep before login and join
-- Safe SSH/web profile with MTU 1200
-- Notes panel shows the active preferred MTU
-- Still compatible with the Linux helper scripts introduced earlier
+- Manual MTU input
+- Lower MTU preset helper
+- Auto MTU test against the selected Hamachi peer
+- Clear relay warning in the members area
+- Route summary in notes for direct vs relay paths
