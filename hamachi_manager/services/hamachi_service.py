@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
 import shlex
+import shutil
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
+from time import monotonic
 
 from PyQt6.QtCore import QObject, QProcess, pyqtSignal
 
@@ -44,6 +48,10 @@ class HamachiService(QObject):
         self._previous_online_state = False
         self._member_state_cache: dict[str, bool] = {}
         self._last_error_message: str | None = None
+        self._preferred_mtu = 1250
+        self._last_tune_attempt = 0.0
+        self._tune_cooldown_seconds = 20.0
+        self._tuning_unavailable_reported = False
 
     def refresh(self, selected_network_id: str | None = None) -> None:
         if selected_network_id is not None:
@@ -54,12 +62,14 @@ class HamachiService(QObject):
         self._enqueue(CommandTask(["hamachi", "list"], "hamachi list", parser_key="list"))
 
     def login(self) -> None:
+        self._ensure_network_tuning()
         self._run_and_refresh(["hamachi", "login"], "hamachi login")
 
     def logout(self) -> None:
         self._run_and_refresh(["hamachi", "logout"], "hamachi logout")
 
     def join_network(self, network_id: str, password: str = "") -> None:
+        self._ensure_network_tuning()
         args = ["hamachi", "join", network_id]
         if password:
             args.append(password)
@@ -67,6 +77,18 @@ class HamachiService(QObject):
 
     def leave_network(self, network_id: str) -> None:
         self._run_and_refresh(["hamachi", "leave", network_id], f"hamachi leave {network_id}")
+
+    def preferred_mtu(self) -> int:
+        return self._preferred_mtu
+
+    def apply_safe_web_profile(self) -> int:
+        self._preferred_mtu = 1200
+        self.logger.log("Applied safe SSH/web profile")
+        self.apply_network_tuning(force=True)
+        return self._preferred_mtu
+
+    def apply_network_tuning(self, force: bool = True) -> None:
+        self._ensure_network_tuning(force=force)
 
     def set_nickname(self, nickname: str) -> None:
         self._run_and_refresh(["hamachi", "set-nick", nickname], f"hamachi set-nick {nickname}")
@@ -89,11 +111,32 @@ class HamachiService(QObject):
             self.logger.log(message)
             return
 
+        if len(args) > 1 and args[1] in {"login", "join"}:
+            self._ensure_network_tuning()
         refresh_after = any(token in args for token in {"login", "logout", "join", "leave", "set-nick"})
         self._enqueue(CommandTask(args, command_line, refresh_after=refresh_after))
 
     def _run_and_refresh(self, args: list[str], label: str) -> None:
         self._enqueue(CommandTask(args, label, refresh_after=True))
+
+    def _ensure_network_tuning(self, force: bool = False) -> None:
+        now = monotonic()
+        if not force and now - self._last_tune_attempt < self._tune_cooldown_seconds:
+            return
+        script_candidates = [
+            Path('/usr/local/sbin/hamachi-network-tune.sh'),
+            Path(__file__).resolve().parents[2] / 'scripts' / 'hamachi-network-tune.sh',
+        ]
+        script_path = next((candidate for candidate in script_candidates if candidate.exists()), None)
+        if script_path is None:
+            return
+        args = [str(script_path), 'ham0', str(self._preferred_mtu), 'clamp']
+        if os.geteuid() != 0:
+            pkexec = shutil.which('pkexec')
+            if pkexec:
+                args = [pkexec, *args]
+        self._last_tune_attempt = now
+        self._enqueue(CommandTask(args, f'Prepare network path: MTU {self._preferred_mtu} + TCP MSS clamp'))
 
     def _enqueue(self, task: CommandTask) -> None:
         self._queue.append(task)

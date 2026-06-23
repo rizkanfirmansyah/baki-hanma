@@ -114,6 +114,7 @@ class MainWindow(QMainWindow):
             ("Join", self._join_network, False),
             ("Leave", self._leave_network, False),
             ("Set Nickname", self._set_nickname, False),
+            ("Safe Profile", self._apply_safe_mtu_profile, False),
         ]:
             button = QPushButton(label, bar)
             if primary:
@@ -330,6 +331,7 @@ class MainWindow(QMainWindow):
         ]
         if self.current_status.account != "-":
             lines.extend(["", f"Account: {self.current_status.account}"])
+        lines.append(f"Preferred Hamachi MTU: {self.service.preferred_mtu()}")
         if self.current_networks:
             selected = self.current_networks[0]
             lines.extend(["", f"Selected Network: {selected.name}", f"Network ID: {selected.network_id}"])
@@ -472,6 +474,11 @@ class MainWindow(QMainWindow):
         nickname, accepted = QInputDialog.getText(self, "Set Nickname", "New nickname:")
         if accepted and nickname.strip():
             self.service.set_nickname(nickname.strip())
+
+    def _apply_safe_mtu_profile(self) -> None:
+        mtu = self.service.apply_safe_web_profile()
+        self.logger.log(f"Safe SSH/web profile selected: MTU {mtu}")
+        self._update_notes()
 
     def _export_csv(self) -> None:
         if not self.current_members:
