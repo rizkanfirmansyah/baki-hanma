@@ -1,12 +1,11 @@
 # BAKI HANMA
 
-BAKI HANMA is a native Linux desktop application for LogMeIn Hamachi workflows on Linux.
+BAKI HANMA now grows into a broader Hamachi monitoring dashboard with a dedicated workspace layout, traffic chart, notes panel, and stronger member visibility.
 
 ## Features in this stage
 
-- Hamachi dashboard summary
-- Network list
-- Member list
-- Live logs
-- Embedded command console
-- Basic join, leave, login, logout, and nickname actions
+- Compact toolbar and dashboard summary
+- Split workspace for networks, notes, and members
+- Live logs and embedded command console
+- Export member list to CSV and Excel
+- Basic traffic chart for Hamachi throughput on `ham0`
