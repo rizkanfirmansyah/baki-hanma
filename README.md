@@ -1,16 +1,12 @@
 # BAKI HANMA
 
-BAKI HANMA is a native Linux desktop application for future Hamachi monitoring and management workflows.
+BAKI HANMA is a native Linux desktop application for LogMeIn Hamachi workflows on Linux.
 
-## Status
+## Features in this stage
 
-Initial project scaffold.
-
-## Run
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python3 main.py
-```
+- Hamachi dashboard summary
+- Network list
+- Member list
+- Live logs
+- Embedded command console
+- Basic join, leave, login, logout, and nickname actions
