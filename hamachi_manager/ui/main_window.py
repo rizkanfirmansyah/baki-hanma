@@ -46,6 +46,8 @@ class MainWindow(QMainWindow):
         self.current_status = HamachiStatus()
         self.current_networks: list[NetworkInfo] = []
         self.current_members: list[MemberInfo] = []
+        self._traffic_interface: str | None = None
+        self._traffic_manual_interface: str | None = None
         self._traffic_prev_sample: tuple[int, int, float] | None = None
         self.mono_font = QFont("DejaVu Sans Mono", 10)
         if icon_path and icon_path.exists():
@@ -258,6 +260,7 @@ class MainWindow(QMainWindow):
         self.service.networks_updated.connect(self._populate_networks)
         self.service.members_updated.connect(self._populate_members)
         self.service.error_occurred.connect(self._show_error)
+        self.traffic_widget.interface_changed.connect(self._on_traffic_interface_changed)
 
     def _configure_table(self, table: QTableWidget) -> None:
         table.setAlternatingRowColors(True)
@@ -330,28 +333,38 @@ class MainWindow(QMainWindow):
         if self.current_networks:
             selected = self.current_networks[0]
             lines.extend(["", f"Selected Network: {selected.name}", f"Network ID: {selected.network_id}"])
-        lines.append("Traffic source: ham0")
+        if self._traffic_interface:
+            lines.append(f"Traffic Interface In Use: {self._traffic_interface}")
+        lines.append(f"Traffic Monitor Selection: {self._traffic_manual_interface or 'Auto (preferred)'}")
         lines.extend(["", "Tips", "- Watch the traffic chart for upload/download spikes.", "- Use the command console to run hamachi list or reconnect flows."])
         self.notes_panel.setPlainText("\n".join(lines))
 
     def _poll_traffic_stats(self) -> None:
         counters = self._read_netdev_counters()
-        if "ham0" not in counters:
+        preferred_interfaces = self._preferred_traffic_interfaces(counters)
+        selected_interface = self._resolve_selected_traffic_interface(counters)
+        self.traffic_widget.set_interface_choices(preferred_interfaces, self._traffic_manual_interface)
+        self._traffic_interface = selected_interface
+
+        if not selected_interface:
             self._traffic_prev_sample = None
             self.traffic_widget.reset_metrics(None)
+            self._update_notes()
             return
-        rx_bytes, tx_bytes = counters["ham0"]
+
+        rx_bytes, tx_bytes = counters[selected_interface]
         now = monotonic()
         previous = self._traffic_prev_sample
         self._traffic_prev_sample = (rx_bytes, tx_bytes, now)
         if previous is None:
-            self.traffic_widget.reset_metrics("ham0")
+            self.traffic_widget.reset_metrics(selected_interface)
+            self._update_notes()
             return
         prev_rx, prev_tx, prev_time = previous
         elapsed = max(now - prev_time, 0.001)
         download_mbps = max((rx_bytes - prev_rx) * 8 / elapsed / 1_000_000, 0.0)
         upload_mbps = max((tx_bytes - prev_tx) * 8 / elapsed / 1_000_000, 0.0)
-        self.traffic_widget.update_metrics(upload_mbps, download_mbps, "ham0")
+        self.traffic_widget.update_metrics(upload_mbps, download_mbps, selected_interface)
 
     def _read_netdev_counters(self) -> dict[str, tuple[int, int]]:
         counters: dict[str, tuple[int, int]] = {}
@@ -369,6 +382,46 @@ class MainWindow(QMainWindow):
                 continue
             counters[name_part.strip()] = (int(fields[0]), int(fields[8]))
         return counters
+
+    def _preferred_traffic_interfaces(self, counters: dict[str, tuple[int, int]]) -> list[str]:
+        preferred: list[str] = []
+        for candidate in ("ham0", "hamachi", "tun0"):
+            if candidate in counters and candidate not in preferred:
+                preferred.append(candidate)
+        for name in sorted(counters):
+            if name.startswith(("lo", "docker", "veth", "br-", "virbr", "ifb")):
+                continue
+            if name not in preferred:
+                preferred.append(name)
+        return preferred
+
+    def _resolve_selected_traffic_interface(self, counters: dict[str, tuple[int, int]]) -> str | None:
+        if self._traffic_manual_interface:
+            if self._traffic_manual_interface in counters:
+                if self._traffic_prev_sample and self._traffic_interface != self._traffic_manual_interface:
+                    self._traffic_prev_sample = None
+                return self._traffic_manual_interface
+            self._traffic_prev_sample = None
+            return None
+
+        auto_interface = self._select_auto_traffic_interface(counters)
+        if self._traffic_prev_sample and self._traffic_interface != auto_interface:
+            self._traffic_prev_sample = None
+        return auto_interface
+
+    def _select_auto_traffic_interface(self, counters: dict[str, tuple[int, int]]) -> str | None:
+        if self._traffic_interface in counters and self._traffic_interface in {"ham0", "hamachi", "tun0"}:
+            return self._traffic_interface
+        for candidate in ("ham0", "hamachi", "tun0"):
+            if candidate in counters:
+                return candidate
+        fallback = [name for name in counters if not name.startswith(("lo", "docker", "veth", "br-", "virbr", "ifb"))]
+        return fallback[0] if fallback else None
+
+    def _on_traffic_interface_changed(self, interface_name: str) -> None:
+        self._traffic_manual_interface = interface_name or None
+        self._traffic_prev_sample = None
+        self._poll_traffic_stats()
 
     def _style_status_item(self, item: QTableWidgetItem, status: str) -> None:
         lowered = status.lower()

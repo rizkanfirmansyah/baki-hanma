@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections import deque
 
-from PyQt6.QtCore import QPointF, Qt
+from PyQt6.QtCore import QPointF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 
 class TrafficChartCanvas(QWidget):
@@ -33,7 +33,6 @@ class TrafficChartCanvas(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.rect().adjusted(10, 10, -10, -14)
         painter.fillRect(rect, QColor("#0b1422"))
-
         grid_pen = QPen(QColor("#1f2937"), 1)
         grid_pen.setStyle(Qt.PenStyle.DashLine)
         painter.setPen(grid_pen)
@@ -60,48 +59,55 @@ class TrafficChartCanvas(QWidget):
             normalized = min(max(value / max_value, 0.0), 1.0)
             y = rect.bottom() - normalized * rect.height()
             coords.append(QPointF(x, y))
-
         line_path = QPainterPath(coords[0])
         for point in coords[1:]:
             line_path.lineTo(point)
-
         fill_path = QPainterPath(coords[0])
         for point in coords[1:]:
             fill_path.lineTo(point)
         fill_path.lineTo(rect.right(), rect.bottom())
         fill_path.lineTo(rect.left(), rect.bottom())
         fill_path.closeSubpath()
-
         painter.fillPath(fill_path, fill_color)
         painter.setPen(QPen(line_color, 2.2))
         painter.drawPath(line_path)
 
 
 class TrafficMonitorWidget(QFrame):
+    interface_changed = pyqtSignal(str)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("TrafficCard")
+        self._auto_label = "Auto (preferred)"
+        self._suppress_interface_signal = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
 
+        title_row = QHBoxLayout()
+        title_col = QVBoxLayout()
         title = QLabel("Traffic Monitor", self)
         title.setObjectName("SectionTitle")
         subtitle = QLabel("Upload / download throughput trend", self)
         subtitle.setObjectName("MutedLabel")
-        self.interface_label = QLabel("Interface in use: ham0", self)
-        self.interface_label.setObjectName("TrafficMeta")
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+        self.interface_combo = QComboBox(self)
+        self.interface_combo.currentTextChanged.connect(self._emit_interface_change)
+        title_row.addLayout(title_col, 1)
+        title_row.addWidget(self.interface_combo, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(title_row)
 
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
+        self.interface_label = QLabel("Interface in use: detecting...", self)
+        self.interface_label.setObjectName("TrafficMeta")
         layout.addWidget(self.interface_label)
 
         self.chart = TrafficChartCanvas(self)
         layout.addWidget(self.chart)
 
         stats_row = QHBoxLayout()
-        stats_row.setSpacing(12)
         self.upload_label = QLabel("Upload: 0 kbps", self)
         self.upload_label.setObjectName("TrafficUpload")
         self.download_label = QLabel("Download: 0 kbps", self)
@@ -113,6 +119,20 @@ class TrafficMonitorWidget(QFrame):
         stats_row.addStretch(1)
         stats_row.addWidget(self.trend_label)
         layout.addLayout(stats_row)
+
+    def set_interface_choices(self, interfaces: list[str], selected_interface: str | None, auto_label: str | None = None) -> None:
+        if auto_label is not None:
+            self._auto_label = auto_label
+        current_text = self.interface_combo.currentText()
+        self._suppress_interface_signal = True
+        self.interface_combo.clear()
+        self.interface_combo.addItem(self._auto_label)
+        for name in interfaces:
+            self.interface_combo.addItem(name)
+        preferred = selected_interface or current_text or self._auto_label
+        index = self.interface_combo.findText(preferred)
+        self.interface_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._suppress_interface_signal = False
 
     def update_metrics(self, upload_mbps: float, download_mbps: float, interface_name: str | None) -> None:
         self.chart.add_sample(upload_mbps, download_mbps)
@@ -128,6 +148,11 @@ class TrafficMonitorWidget(QFrame):
         self.download_label.setText("Download: 0 kbps")
         self.trend_label.setText("Trend: Stable")
 
+    def _emit_interface_change(self, text: str) -> None:
+        if self._suppress_interface_signal:
+            return
+        self.interface_changed.emit("" if text == self._auto_label else text)
+
     def _compute_trend(self) -> str:
         upload_points, download_points = self.chart.samples()
         combined = [u + d for u, d in zip(upload_points, download_points)]
@@ -138,9 +163,7 @@ class TrafficMonitorWidget(QFrame):
         delta = recent - previous
         if abs(delta) < 0.15:
             return "Stable"
-        if delta > 0:
-            return "Rising"
-        return "Falling"
+        return "Rising" if delta > 0 else "Falling"
 
     @staticmethod
     def _format_rate(value_mbps: float) -> str:

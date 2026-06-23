@@ -1,11 +1,10 @@
 # BAKI HANMA
 
-BAKI HANMA now grows into a broader Hamachi monitoring dashboard with a dedicated workspace layout, traffic chart, notes panel, and stronger member visibility.
+BAKI HANMA now supports traffic source switching, so the monitor can follow `ham0`, `wlp`, or another useful interface when Hamachi traffic does not stay on a single device.
 
 ## Features in this stage
 
-- Compact toolbar and dashboard summary
-- Split workspace for networks, notes, and members
-- Live logs and embedded command console
-- Export member list to CSV and Excel
-- Basic traffic chart for Hamachi throughput on `ham0`
+- Broad workspace for networks, notes, members, logs, and traffic
+- Traffic chart with auto/manual interface source selection
+- Better visibility when traffic moves from `ham0` to another active interface
+- Export support and operational notes panel
